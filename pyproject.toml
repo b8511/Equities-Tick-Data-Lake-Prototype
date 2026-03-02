@@ -1,0 +1,19 @@
+[project]
+name = "equity-tick-lake"
+version = "1.0.0"
+description = "Cash equities tick data lake with ClickHouse, dbt, and Grafana"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+
+dependencies = [
+    "numpy>=1.24",
+    "clickhouse-connect>=0.7",
+    "dbt-core>=1.7",
+    "dbt-clickhouse>=1.7",
+]
+
+[dependency-groups]
+dev = [
+    "ipython",
+]

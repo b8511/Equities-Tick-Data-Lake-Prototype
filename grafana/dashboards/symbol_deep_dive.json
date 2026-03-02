@@ -1,0 +1,132 @@
+{
+  "uid": "symbol-deep-dive",
+  "title": "Symbol Deep Dive",
+  "tags": ["equity", "detail"],
+  "timezone": "utc",
+  "editable": true,
+  "time": { "from": "now-3d", "to": "now" },
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "name": "symbol",
+        "type": "query",
+        "datasource": "ClickHouse",
+        "query": "SELECT DISTINCT symbol FROM equity_market.trades ORDER BY symbol",
+        "multi": false,
+        "includeAll": false,
+        "current": { "text": "AAPL", "value": "AAPL" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "$symbol — Tick Chart (Trade Prices)",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 16, "x": 0, "y": 0 },
+      "datasource": "ClickHouse",
+      "targets": [
+        {
+          "rawSql": "SELECT timestamp AS time, trade_price FROM equity_market.trades WHERE symbol = '$symbol' AND $__timeFilter(timestamp) AND data_quality_flag = 'OK' ORDER BY timestamp",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 1, "fillOpacity": 5, "pointSize": 2 }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "$symbol — OHLC (1-min)",
+      "type": "candlestick",
+      "gridPos": { "h": 10, "w": 8, "x": 16, "y": 0 },
+      "datasource": "ClickHouse",
+      "targets": [
+        {
+          "rawSql": "SELECT minute_bucket AS time, open, high, low, close FROM equity_market.int_vwap WHERE symbol = '$symbol' AND $__timeFilter(minute_bucket) ORDER BY minute_bucket",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "$symbol — Spread Evolution (bps)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "datasource": "ClickHouse",
+      "targets": [
+        {
+          "rawSql": "SELECT minute_bucket AS time, avg_spread_bps, p95_spread_bps FROM equity_market.int_spread_analytics WHERE symbol = '$symbol' AND $__timeFilter(minute_bucket) ORDER BY minute_bucket",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "fillOpacity": 10 }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "$symbol — Volume by 5-min Bucket",
+      "type": "barchart",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "datasource": "ClickHouse",
+      "targets": [
+        {
+          "rawSql": "SELECT bucket_start AS time, bucket_volume AS volume FROM equity_market.int_volume_profile WHERE symbol = '$symbol' AND $__timeFilter(bucket_start) ORDER BY bucket_start",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "$symbol — Trade Size Distribution",
+      "type": "histogram",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+      "datasource": "ClickHouse",
+      "targets": [
+        {
+          "rawSql": "SELECT trade_size FROM equity_market.trades WHERE symbol = '$symbol' AND $__timeFilter(timestamp) AND data_quality_flag = 'OK' LIMIT 100000",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "$symbol — Daily Stats",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+      "datasource": "ClickHouse",
+      "targets": [
+        {
+          "rawSql": "SELECT trade_date, open_price, high_price, low_price, close_price, total_volume, day_vwap, round(avg_spread_bps, 2) AS spread_bps, total_quality_issues, round(daily_return_pct, 3) AS return_pct FROM equity_market.mart_daily_summary WHERE symbol = '$symbol' ORDER BY trade_date DESC",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "$symbol — Quality Issues",
+      "type": "table",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 26 },
+      "datasource": "ClickHouse",
+      "targets": [
+        {
+          "rawSql": "SELECT event_time, source_table, issue_type, severity, details FROM equity_market.data_quality_issues WHERE symbol = '$symbol' AND $__timeFilter(event_time) ORDER BY event_time DESC LIMIT 100",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

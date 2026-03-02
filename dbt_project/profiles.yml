@@ -1,0 +1,12 @@
+equity_tick_lake:
+  target: dev
+  outputs:
+    dev:
+      type: clickhouse
+      schema: equity_market
+      host: localhost
+      port: 8123
+      user: default
+      password: "clickhouse"
+      secure: false
+      verify: false

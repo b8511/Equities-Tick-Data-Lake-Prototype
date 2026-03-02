@@ -1,0 +1,135 @@
+{
+  "uid": "data-quality",
+  "title": "Data Quality Monitor",
+  "tags": ["equity", "quality"],
+  "timezone": "utc",
+  "editable": true,
+  "time": { "from": "now-30d", "to": "now" },
+  "refresh": "1m",
+  "templating": {
+    "list": [
+      {
+        "name": "symbol",
+        "type": "query",
+        "datasource": "ClickHouse",
+        "query": "SELECT DISTINCT symbol FROM equity_market.data_quality_issues ORDER BY symbol",
+        "multi": true,
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "severity",
+        "type": "custom",
+        "query": "INFO,WARNING,CRITICAL",
+        "multi": true,
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Issues Over Time",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 0 },
+      "datasource": "ClickHouse",
+      "targets": [
+        {
+          "rawSql": "SELECT toStartOfHour(detected_at) AS time, issue_type, count() AS cnt FROM equity_market.data_quality_issues WHERE $__timeFilter(detected_at) AND symbol IN ($symbol) GROUP BY time, issue_type ORDER BY time",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "fillOpacity": 20, "stacking": { "mode": "normal" } }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Issue Count by Type",
+      "type": "piechart",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "datasource": "ClickHouse",
+      "targets": [
+        {
+          "rawSql": "SELECT issue_type, count() AS cnt FROM equity_market.data_quality_issues WHERE $__timeFilter(detected_at) AND symbol IN ($symbol) GROUP BY issue_type ORDER BY cnt DESC",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Issues by Symbol",
+      "type": "barchart",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": "ClickHouse",
+      "targets": [
+        {
+          "rawSql": "SELECT symbol, issue_type, count() AS cnt FROM equity_market.data_quality_issues WHERE $__timeFilter(detected_at) GROUP BY symbol, issue_type ORDER BY cnt DESC LIMIT 50",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Severity Breakdown",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 12, "x": 12, "y": 8 },
+      "datasource": "ClickHouse",
+      "targets": [
+        {
+          "rawSql": "SELECT severity, count() AS cnt FROM equity_market.data_quality_issues WHERE $__timeFilter(detected_at) GROUP BY severity",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Data Quality Rate (%)",
+      "description": "Percentage of clean rows across trades + quotes",
+      "type": "gauge",
+      "gridPos": { "h": 4, "w": 12, "x": 12, "y": 12 },
+      "datasource": "ClickHouse",
+      "targets": [
+        {
+          "rawSql": "SELECT round(100 - (SELECT count() FROM equity_market.data_quality_issues) / ((SELECT count() FROM equity_market.trades) + (SELECT count() FROM equity_market.quotes)) * 100, 3) AS quality_pct",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 95,
+          "max": 100,
+          "thresholds": {
+            "steps": [
+              { "color": "red", "value": 95 },
+              { "color": "yellow", "value": 99 },
+              { "color": "green", "value": 99.9 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 6,
+      "title": "Recent Issues (Detail)",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "datasource": "ClickHouse",
+      "targets": [
+        {
+          "rawSql": "SELECT detected_at, source_table, symbol, event_time, issue_type, severity, details FROM equity_market.data_quality_issues WHERE $__timeFilter(detected_at) AND symbol IN ($symbol) ORDER BY detected_at DESC LIMIT 200",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+version: 2
+
+models:
+  - name: mart_daily_summary
+    description: "Daily OHLCV + spread + quality metrics per symbol"
+    columns:
+      - name: symbol
+        tests: [not_null]
+      - name: trade_date
+        tests: [not_null]
+      - name: open_price
+        tests: [not_null]
+      - name: total_volume
+        tests: [not_null]
+      - name: day_vwap
+        tests: [not_null]
+
+  - name: mart_data_quality_summary
+    description: "Aggregated data quality issues by day/symbol/type"
+    columns:
+      - name: issue_date
+        tests: [not_null]
+      - name: issue_type
+        tests: [not_null]
+      - name: issue_count
+        tests: [not_null]

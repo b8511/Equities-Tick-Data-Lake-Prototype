@@ -1,0 +1,33 @@
+version: 2
+
+sources:
+  - name: raw
+    database: equity_market
+    schema: equity_market
+    tables:
+      - name: trades
+        description: "Raw trade ticks with microsecond timestamps"
+        columns:
+          - name: symbol
+            tests: [not_null]
+          - name: timestamp
+            tests: [not_null]
+          - name: trade_price
+            tests: [not_null]
+          - name: trade_size
+            tests: [not_null]
+
+      - name: quotes
+        description: "Raw L1 quote ticks (bid/ask)"
+        columns:
+          - name: symbol
+            tests: [not_null]
+          - name: timestamp
+            tests: [not_null]
+          - name: bid_price
+            tests: [not_null]
+          - name: ask_price
+            tests: [not_null]
+
+      - name: data_quality_issues
+        description: "Logged data quality anomalies"

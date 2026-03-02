@@ -1,0 +1,20 @@
+name: "equity_tick_lake"
+version: "1.0.0"
+config-version: 2
+
+profile: "equity_tick_lake"
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  equity_tick_lake:
+    staging:
+      +materialized: view
+    intermediate:
+      +materialized: table
+    marts:
+      +materialized: table

@@ -1,0 +1,99 @@
+{
+  "uid": "market-overview",
+  "title": "Market Overview",
+  "tags": ["equity", "overview"],
+  "timezone": "utc",
+  "editable": true,
+  "time": { "from": "now-7d", "to": "now" },
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "name": "symbol",
+        "type": "query",
+        "datasource": "ClickHouse",
+        "query": "SELECT DISTINCT symbol FROM equity_market.trades ORDER BY symbol",
+        "multi": true,
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "VWAP by Symbol (1-min)",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 16, "x": 0, "y": 0 },
+      "datasource": "ClickHouse",
+      "targets": [
+        {
+          "rawSql": "SELECT minute_bucket AS time, symbol, vwap FROM equity_market.int_vwap WHERE $__timeFilter(minute_bucket) AND symbol IN ($symbol) ORDER BY minute_bucket",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 1, "fillOpacity": 0 }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Total Volume by Symbol",
+      "type": "barchart",
+      "gridPos": { "h": 10, "w": 8, "x": 16, "y": 0 },
+      "datasource": "ClickHouse",
+      "targets": [
+        {
+          "rawSql": "SELECT symbol, sum(total_volume) AS volume FROM equity_market.int_vwap WHERE $__timeFilter(minute_bucket) AND symbol IN ($symbol) GROUP BY symbol ORDER BY volume DESC",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Spread Heatmap (avg bps by symbol × hour)",
+      "type": "heatmap",
+      "gridPos": { "h": 10, "w": 16, "x": 0, "y": 10 },
+      "datasource": "ClickHouse",
+      "targets": [
+        {
+          "rawSql": "SELECT toStartOfHour(minute_bucket) AS time, symbol, avg(avg_spread_bps) AS spread FROM equity_market.int_spread_analytics WHERE $__timeFilter(minute_bucket) AND symbol IN ($symbol) GROUP BY time, symbol ORDER BY time",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Intraday Volume Profile (5-min)",
+      "type": "barchart",
+      "gridPos": { "h": 10, "w": 8, "x": 16, "y": 10 },
+      "datasource": "ClickHouse",
+      "targets": [
+        {
+          "rawSql": "SELECT toTime(bucket_start) AS time_of_day, sum(bucket_volume) AS volume FROM equity_market.int_volume_profile WHERE $__timeFilter(bucket_start) AND symbol IN ($symbol) GROUP BY time_of_day ORDER BY time_of_day",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Daily Summary Table",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
+      "datasource": "ClickHouse",
+      "targets": [
+        {
+          "rawSql": "SELECT symbol, trade_date, open_price, high_price, low_price, close_price, total_volume, day_vwap, avg_spread_bps, total_quality_issues, round(daily_return_pct, 3) AS return_pct FROM equity_market.mart_daily_summary WHERE $__timeFilter(trade_date) AND symbol IN ($symbol) ORDER BY trade_date DESC, symbol",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+version: 2
+
+models:
+  - name: stg_trades
+    description: "Cleaned trades with computed notional and quality flag"
+    columns:
+      - name: symbol
+        tests: [not_null]
+      - name: timestamp
+        tests: [not_null]
+      - name: trade_price
+        tests:
+          - not_null
+      - name: trade_size
+        tests:
+          - not_null
+      - name: trade_notional
+        description: "trade_price * trade_size"
+      - name: data_quality_flag
+        tests:
+          - accepted_values:
+              arguments:
+                values:
+                  [
+                    "OK",
+                    "PRICE_OUTLIER",
+                    "SIZE_OUTLIER",
+                    "STALE",
+                    "MISSING_FIELD",
+                  ]
+
+  - name: stg_quotes
+    description: "Cleaned quotes with computed spread metrics"
+    columns:
+      - name: symbol
+        tests: [not_null]
+      - name: timestamp
+        tests: [not_null]
+      - name: spread_bps
+        description: "Bid-ask spread in basis points"
+      - name: data_quality_flag
+        tests:
+          - accepted_values:
+              arguments:
+                values:
+                  [
+                    "OK",
+                    "CROSSED_SPREAD",
+                    "WIDE_SPREAD",
+                    "STALE",
+                    "MISSING_FIELD",
+                  ]

@@ -1,0 +1,22 @@
+version: 2
+
+models:
+  - name: int_vwap
+    description: "Per-symbol per-minute VWAP with OHLC"
+    columns:
+      - name: vwap
+        tests: [not_null]
+      - name: total_volume
+        description: "Must be positive for clean data"
+
+  - name: int_spread_analytics
+    description: "Per-symbol per-minute spread statistics"
+    columns:
+      - name: avg_spread_bps
+        tests: [not_null]
+
+  - name: int_volume_profile
+    description: "5-minute intraday volume buckets"
+    columns:
+      - name: bucket_volume
+        tests: [not_null]
