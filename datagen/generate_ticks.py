@@ -23,7 +23,7 @@ import numpy as np
 # Configuration
 # ---------------------------------------------------------------------------
 OUTPUT_DIR = Path(__file__).parent.parent / "data"
-NUM_TRADING_DAYS = 30
+NUM_TRADING_DAYS = 1
 START_DATE = datetime(2025, 12, 1, tzinfo=timezone.utc)
 
 # Market hours (US Eastern approximation in UTC: 14:30 - 21:00)
