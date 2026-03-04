@@ -142,15 +142,29 @@ make dbt-test
 | exchange | LowCardinality(String) | Reporting exchange |
 | data_quality_flag | Enum8 | OK, CROSSED_SPREAD, STALE, etc. |
 
+**`order_book_snapshots`** — L2 order book (10 bid + 10 ask price levels)
+| Column | Type | Description |
+|--------|------|-------------|
+| symbol | LowCardinality(String) | Ticker symbol |
+| timestamp | DateTime64(6, 'UTC') | Microsecond precision |
+| bid_prices / ask_prices | Array(Float64) | 10 price levels; index 1 = best |
+| bid_sizes / ask_sizes | Array(UInt32) | Volume at each level |
+| mid_price | Float64 | (BBO bid + BBO ask) / 2 |
+| weighted_mid | Float64 | Size-weighted mid across all levels |
+| book_imbalance | Float32 | (sum_bid_vol − sum_ask_vol) / total_vol; range [−1, 1] |
+| data_quality_flag | Enum8 | OK, CROSSED_BOOK, MISSING_LEVELS, STALE |
+
 ### dbt models
 
 | Layer | Model | Description |
 |-------|-------|-------------|
 | Staging | `stg_trades` | Cleaned trades + computed notional |
 | Staging | `stg_quotes` | Cleaned quotes + spread in bps |
+| Staging | `stg_order_book` | L2 snapshots unpivoted to long format (one row per side+level) |
 | Intermediate | `int_vwap` | Per-symbol per-minute VWAP + OHLC |
 | Intermediate | `int_spread_analytics` | Spread stats (avg, median, p95) |
 | Intermediate | `int_volume_profile` | 5-min intraday volume distribution |
+| Intermediate | `int_order_book_depth` | Per-minute depth, imbalance, spread from L2 book |
 | Mart | `mart_daily_summary` | Daily OHLCV + spread + quality metrics |
 | Mart | `mart_data_quality_summary` | Aggregated quality issues |
 
