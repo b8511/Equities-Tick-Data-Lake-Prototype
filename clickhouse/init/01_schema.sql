@@ -56,6 +56,37 @@ ORDER BY (symbol, timestamp)
 SETTINGS index_granularity = 8192;
 
 -- --------------------------------------------------------
+-- L2 Order Book Snapshots
+-- Stores 10-level bid/ask depth snapshots as arrays.
+-- bid_prices[1] / ask_prices[1] = best bid / best ask (L1).
+-- bid_prices[N] = Nth best bid (descending), ask_prices[N] = Nth best ask (ascending).
+-- Snapshot frequency: ~same cadence as L1 quotes.
+-- --------------------------------------------------------
+CREATE TABLE IF NOT EXISTS equity_market.order_book_snapshots
+(
+    symbol          LowCardinality(String),
+    timestamp       DateTime64(6, 'UTC'),
+    bid_prices      Array(Float64),   -- 10 levels, index 1 = best bid
+    bid_sizes       Array(UInt32),
+    ask_prices      Array(Float64),   -- 10 levels, index 1 = best ask
+    ask_sizes       Array(UInt32),
+    -- Pre-computed convenience fields
+    mid_price       Float64,          -- (bid_prices[1] + ask_prices[1]) / 2
+    weighted_mid    Float64,          -- size-weighted mid across all levels
+    book_imbalance  Float32,          -- (sum_bid_vol - sum_ask_vol) / (sum_bid_vol + sum_ask_vol)
+    data_quality_flag Enum8(
+        'OK' = 0,
+        'CROSSED_BOOK' = 1,
+        'MISSING_LEVELS' = 2,
+        'STALE' = 3
+    ) DEFAULT 'OK'
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMMDD(timestamp)
+ORDER BY (symbol, timestamp)
+SETTINGS index_granularity = 8192;
+
+-- --------------------------------------------------------
 -- Data quality issues log
 -- --------------------------------------------------------
 CREATE TABLE IF NOT EXISTS equity_market.data_quality_issues

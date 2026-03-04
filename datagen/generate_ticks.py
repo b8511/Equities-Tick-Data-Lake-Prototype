@@ -1,15 +1,21 @@
 """
 Synthetic Equities Tick Data Generator
 ======================================
-Generates realistic L1 trade and quote data for ~25 symbols over 30 trading days.
-Deliberately injects data quality anomalies (crossed spreads, stale quotes,
-price outliers) for the quality monitoring layer to detect.
+Generates realistic L1 trade and quote data, plus L2 order book snapshots,
+for ~25 symbols over 30 trading days.  Deliberately injects data quality
+anomalies (crossed spreads, stale quotes, price outliers) for the quality
+monitoring layer to detect.
 
-Target: ~50M total rows (trades + quotes combined).
+L2 order book snapshots contain 10 bid and 10 ask price levels per snapshot,
+reflecting realistic market microstructure (geometric level spacing, power-law
+size distribution, correlated bid/ask imbalance).
+
+Target: ~50M total rows (trades + quotes + order_book combined).
 Output: CSV files ready for ClickHouse bulk insert.
 """
 
 import csv
+import json
 import os
 import random
 import math
@@ -36,6 +42,11 @@ STALE_QUOTE_RATE = 0.002          # 0.2% of quotes will have a > 5s gap flagged
 PRICE_OUTLIER_RATE = 0.0005       # 0.05% of trades
 MISSING_FIELD_RATE = 0.0003       # 0.03%
 
+# L2 order book parameters
+OB_LEVELS = 10                    # depth levels per side
+OB_ANOMALY_MISSING_RATE = 0.0005  # 0.05% of snapshots have incomplete levels
+OB_ANOMALY_CROSSED_RATE = 0.0003  # 0.03% have crossed book (bad feed)
+
 EXCHANGES = ["NYSE", "NASDAQ", "ARCA", "BATS", "IEX", "EDGX"]
 TRADE_CONDITIONS = ["@", "F", "T", "I", "W"]  # regular, intermarket sweep, ext hours, etc.
 
@@ -53,6 +64,12 @@ class SymbolConfig:
     avg_trade_size: int
     trades_per_day: int        # approximate
     quotes_per_day: int        # approximate (typically 3-5x trades)
+    ob_snapshots_per_day: int = 0  # L2 snapshots; set in __post_init__
+
+    def __post_init__(self):
+        # L2 snapshots at ~same cadence as L1 quotes
+        if self.ob_snapshots_per_day == 0:
+            self.ob_snapshots_per_day = self.quotes_per_day
 
 
 # 25 symbols with varied characteristics
@@ -211,6 +228,98 @@ def generate_trades_for_day(
     return rows
 
 
+def generate_order_book_for_day(
+    sym: SymbolConfig, day: datetime, price_path: np.ndarray,
+    timestamps_us: np.ndarray, rng: np.random.Generator
+) -> list[list]:
+    """
+    Generate L2 order book snapshots (OB_LEVELS bid + OB_LEVELS ask) for one symbol-day.
+
+    Level structure:
+      - Level 1 = BBO (best bid / best ask)
+      - Each subsequent level steps away by ~0.5–1× avg_spread, following a
+        slightly random geometric spacing so the book looks organic.
+      - Sizes follow a right-skewed distribution: heaviest liquidity near the
+        touch, thinning out at deeper levels (power-law ~ 1/level).
+    """
+    n = len(timestamps_us)
+    tick = sym.base_price * (sym.avg_spread_bps / 10_000)  # 1 spread-unit in $
+    rows = []
+
+    for i in range(n):
+        mid = float(price_path[i] if i < len(price_path) else price_path[-1])
+        half_spread = tick / 2 * rng.lognormal(0, 0.3)  # noisy spread
+        bbo_bid = round(mid - half_spread, 2)
+        bbo_ask = round(mid + half_spread, 2)
+
+        flag = "OK"
+        r = rng.random()
+
+        if r < OB_ANOMALY_CROSSED_RATE:
+            # Crossed book: best bid > best ask
+            bbo_bid, bbo_ask = bbo_ask + 0.01, bbo_bid - 0.01
+            flag = "CROSSED_BOOK"
+        elif r < OB_ANOMALY_CROSSED_RATE + OB_ANOMALY_MISSING_RATE:
+            flag = "MISSING_LEVELS"
+
+        # --- Build bid levels (descending from BBO) ---
+        bid_prices = [bbo_bid]
+        bid_sizes = [int(max(100, rng.lognormal(math.log(sym.avg_trade_size * 3), 0.5)))]
+        for lvl in range(1, OB_LEVELS):
+            step = tick * rng.uniform(0.4, 0.8)  # geometric-ish spacing
+            bid_prices.append(round(bid_prices[-1] - step, 2))
+            # Size decays with depth; add noise
+            base_sz = sym.avg_trade_size * 5 / (lvl + 1)
+            bid_sizes.append(int(max(100, rng.lognormal(math.log(base_sz), 0.6))))
+
+        # --- Build ask levels (ascending from BBO) ---
+        ask_prices = [bbo_ask]
+        ask_sizes = [int(max(100, rng.lognormal(math.log(sym.avg_trade_size * 3), 0.5)))]
+        for lvl in range(1, OB_LEVELS):
+            step = tick * rng.uniform(0.4, 0.8)
+            ask_prices.append(round(ask_prices[-1] + step, 2))
+            base_sz = sym.avg_trade_size * 5 / (lvl + 1)
+            ask_sizes.append(int(max(100, rng.lognormal(math.log(base_sz), 0.6))))
+
+        if flag == "MISSING_LEVELS":
+            # Truncate to 5 levels to simulate partial snap
+            bid_prices = bid_prices[:5] + [0.0] * 5
+            bid_sizes  = bid_sizes[:5]  + [0]   * 5
+            ask_prices = ask_prices[:5] + [0.0] * 5
+            ask_sizes  = ask_sizes[:5]  + [0]   * 5
+
+        # Pre-compute aggregate fields
+        total_bid_vol = sum(bid_sizes)
+        total_ask_vol = sum(ask_sizes)
+        mid_price = round((bid_prices[0] + ask_prices[0]) / 2, 4)
+
+        # Weighted mid: Σ(price × size) / Σ(size) across all bid+ask levels
+        num = sum(p * s for p, s in zip(bid_prices, bid_sizes)) + \
+              sum(p * s for p, s in zip(ask_prices, ask_sizes))
+        denom = total_bid_vol + total_ask_vol
+        weighted_mid = round(num / denom, 4) if denom > 0 else mid_price
+
+        imbalance = round(
+            (total_bid_vol - total_ask_vol) / (total_bid_vol + total_ask_vol), 4
+        ) if (total_bid_vol + total_ask_vol) > 0 else 0.0
+
+        ts_str = format_ts(int(timestamps_us[i]))
+        rows.append([
+            sym.symbol,
+            ts_str,
+            json.dumps(bid_prices),
+            json.dumps(bid_sizes),
+            json.dumps(ask_prices),
+            json.dumps(ask_sizes),
+            mid_price,
+            weighted_mid,
+            imbalance,
+            flag,
+        ])
+
+    return rows
+
+
 def write_csv_batch(filepath: Path, rows: list[list], header: list[str], mode: str = "a"):
     """Append rows to CSV file."""
     write_header = mode == "w" or not filepath.exists()
@@ -225,9 +334,10 @@ def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     trades_path = OUTPUT_DIR / "trades.csv"
     quotes_path = OUTPUT_DIR / "quotes.csv"
+    ob_path     = OUTPUT_DIR / "order_book_snapshots.csv"
 
     # Wipe previous output
-    for p in [trades_path, quotes_path]:
+    for p in [trades_path, quotes_path, ob_path]:
         if p.exists():
             p.unlink()
 
@@ -238,13 +348,19 @@ def main():
                     "exchange", "trade_condition", "data_quality_flag"]
     quote_header = ["symbol", "timestamp", "bid_price", "ask_price",
                     "bid_size", "ask_size", "exchange", "data_quality_flag"]
+    ob_header    = ["symbol", "timestamp",
+                    "bid_prices", "bid_sizes", "ask_prices", "ask_sizes",
+                    "mid_price", "weighted_mid", "book_imbalance",
+                    "data_quality_flag"]
 
     total_trades = 0
     total_quotes = 0
+    total_ob     = 0
 
     # Initialise files with headers
     write_csv_batch(trades_path, [], trade_header, mode="w")
     write_csv_batch(quotes_path, [], quote_header, mode="w")
+    write_csv_batch(ob_path,     [], ob_header,    mode="w")
 
     for day_idx, day in enumerate(days):
         day_str = day.strftime("%Y-%m-%d")
@@ -252,21 +368,25 @@ def main():
 
         trade_buffer = []
         quote_buffer = []
+        ob_buffer    = []
 
         for sym in SYMBOLS:
-            # Generate price path for the day (use max of trade/quote count)
-            n_max = max(sym.trades_per_day, sym.quotes_per_day)
+            # Generate price path for the day (use max of trade/quote/ob count)
+            n_max = max(sym.trades_per_day, sym.quotes_per_day, sym.ob_snapshots_per_day)
             price_path = simulate_prices(sym.base_price, sym.daily_vol, n_max, rng)
 
             # Timestamps
             trade_ts = intraday_timestamps(day, sym.trades_per_day, rng)
             quote_ts = intraday_timestamps(day, sym.quotes_per_day, rng)
+            ob_ts    = intraday_timestamps(day, sym.ob_snapshots_per_day, rng)
 
             trade_rows = generate_trades_for_day(sym, day, price_path, trade_ts, rng)
             quote_rows = generate_quotes_for_day(sym, day, price_path, quote_ts, rng)
+            ob_rows    = generate_order_book_for_day(sym, day, price_path, ob_ts, rng)
 
             trade_buffer.extend(trade_rows)
             quote_buffer.extend(quote_rows)
+            ob_buffer.extend(ob_rows)
 
             # Flush in batches to control memory
             if len(trade_buffer) >= BATCH_SIZE:
@@ -277,6 +397,10 @@ def main():
                 write_csv_batch(quotes_path, quote_buffer, quote_header)
                 total_quotes += len(quote_buffer)
                 quote_buffer = []
+            if len(ob_buffer) >= BATCH_SIZE:
+                write_csv_batch(ob_path, ob_buffer, ob_header)
+                total_ob += len(ob_buffer)
+                ob_buffer = []
 
         # Flush remaining
         if trade_buffer:
@@ -285,11 +409,14 @@ def main():
         if quote_buffer:
             write_csv_batch(quotes_path, quote_buffer, quote_header)
             total_quotes += len(quote_buffer)
+        if ob_buffer:
+            write_csv_batch(ob_path, ob_buffer, ob_header)
+            total_ob += len(ob_buffer)
 
-        print(f"    cumulative: {total_trades:,} trades, {total_quotes:,} quotes")
+        print(f"    cumulative: {total_trades:,} trades, {total_quotes:,} quotes, {total_ob:,} ob snapshots")
 
-    print(f"\nDone. Total: {total_trades:,} trades, {total_quotes:,} quotes")
-    print(f"Files: {trades_path}, {quotes_path}")
+    print(f"\nDone. Total: {total_trades:,} trades, {total_quotes:,} quotes, {total_ob:,} ob snapshots")
+    print(f"Files: {trades_path}, {quotes_path}, {ob_path}")
 
 
 if __name__ == "__main__":

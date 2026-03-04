@@ -20,3 +20,23 @@ models:
     columns:
       - name: bucket_volume
         tests: [not_null]
+
+  - name: int_order_book_depth
+    description: >
+      Per-symbol per-minute order book microstructure analytics.
+      Aggregates L2 snapshots into spread, depth, and imbalance metrics
+      suitable for liquidity heatmaps and execution quality analysis.
+    columns:
+      - name: avg_bbo_spread_bps
+        description: "Average BBO spread in basis points across all snapshots in the minute"
+        tests: [not_null]
+      - name: avg_depth_bid_5bps
+        description: "Average cumulative bid volume within 5 bps of mid"
+      - name: avg_depth_ask_5bps
+        description: "Average cumulative ask volume within 5 bps of mid"
+      - name: depth_imbalance_5bps
+        description: "bid_depth_5bps / total_depth_5bps; >0.5 = more bid-side liquidity"
+      - name: avg_book_imbalance
+        description: "Mean (bid_vol - ask_vol) / total_vol over the minute; range [-1, 1]"
+      - name: snapshot_count
+        tests: [not_null]

@@ -31,3 +31,21 @@ sources:
 
       - name: data_quality_issues
         description: "Logged data quality anomalies"
+
+      - name: order_book_snapshots
+        description: "L2 order book snapshots — 10 bid + 10 ask price levels per snapshot"
+        columns:
+          - name: symbol
+            tests: [not_null]
+          - name: timestamp
+            tests: [not_null]
+          - name: bid_prices
+            description: "Array(Float64) — 10 bid levels, index 1 = best bid"
+            tests: [not_null]
+          - name: ask_prices
+            description: "Array(Float64) — 10 ask levels, index 1 = best ask"
+            tests: [not_null]
+          - name: mid_price
+            tests: [not_null]
+          - name: book_imbalance
+            description: "(sum_bid_vol - sum_ask_vol) / total_vol; range [-1, 1]"

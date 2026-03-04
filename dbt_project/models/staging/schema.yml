@@ -50,3 +50,30 @@ models:
                     "STALE",
                     "MISSING_FIELD",
                   ]
+
+  - name: stg_order_book
+    description: >
+      L2 order book snapshots unpivoted to long format: one row per
+      (symbol, timestamp, side, level).  level=1 is the best bid/ask.
+    columns:
+      - name: symbol
+        tests: [not_null]
+      - name: timestamp
+        tests: [not_null]
+      - name: side
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["bid", "ask"]
+      - name: level
+        description: "Depth level 1-10; 1 = best price"
+        tests: [not_null]
+      - name: price
+        tests: [not_null]
+      - name: size
+        tests: [not_null]
+      - name: mid_price
+        tests: [not_null]
+      - name: book_imbalance
+        description: "Passed through from snapshot; range [-1, 1]"
