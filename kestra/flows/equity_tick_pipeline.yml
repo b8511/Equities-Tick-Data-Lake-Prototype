@@ -1,0 +1,158 @@
+id: equity_tick_pipeline
+namespace: bnp.equity
+description: |
+  Full equity tick data pipeline for the BNP Cash Equities prototype.
+
+  Execution order:
+    1. generate_tick_data   — synthetic L1 trades, quotes, and L2 order book snapshots
+    2. load_to_clickhouse   — bulk-insert CSVs into ClickHouse MergeTree tables
+    3. dbt_run              — build all dbt models (staging → intermediate → marts)
+    4. (parallel)
+         quality_checks     — detect crossed spreads, stale quotes, price outliers
+         dbt_test           — validate schema contracts and custom SQL tests
+
+  All Python tasks run inside the Kestra container (/opt/venv) against the
+  ClickHouse instance at container hostname 'clickhouse'.  The project root
+  is mounted at /workspace via docker-compose.
+
+labels:
+  project: bnp-prototype
+  domain: market-data
+  stack: clickhouse-dbt-grafana
+
+inputs:
+  - id: num_trading_days
+    type: INT
+    defaults: 1
+    description: "Number of weekday trading days to generate. Default 1 for quick iteration; use 30 for full dataset."
+
+  - id: symbols_seed
+    type: INT
+    defaults: 42
+    description: "NumPy random seed for reproducible data generation."
+
+tasks:
+  # --------------------------------------------------------------------------
+  # 1. Generate synthetic tick data
+  # --------------------------------------------------------------------------
+  - id: generate_tick_data
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    description: |
+      Generates ~50M rows of synthetic equities tick data using Geometric
+      Brownian Motion price paths, U-shaped intraday volume, and deliberate
+      anomaly injection (crossed spreads, stale quotes, price outliers).
+      Writes three CSVs to /workspace/data/:
+        • trades.csv
+        • quotes.csv
+        • order_book_snapshots.csv  (10-level L2 book)
+    env:
+      NUM_TRADING_DAYS: "{{ inputs.num_trading_days }}"
+      NUMPY_SEED: "{{ inputs.symbols_seed }}"
+      VIRTUAL_ENV: /opt/venv
+      PATH: /opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    commands:
+      - echo "[1/5] Generating tick data ({{ inputs.num_trading_days }} trading day(s)) ..."
+      - cd /workspace && python datagen/generate_ticks.py
+      - echo "      done — $(wc -l < /workspace/data/trades.csv) trade rows"
+      - echo "      done — $(wc -l < /workspace/data/quotes.csv) quote rows"
+
+  # --------------------------------------------------------------------------
+  # 2. Load CSVs into ClickHouse
+  # --------------------------------------------------------------------------
+  - id: load_to_clickhouse
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    description: |
+      Streams the three CSV files into ClickHouse MergeTree tables in chunks
+      of 500 000 rows to avoid OOM on the loader side.
+      Array columns (bid_prices, ask_prices, …) are JSON-decoded before insert.
+    env:
+      VIRTUAL_ENV: /opt/venv
+      PATH: /opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    commands:
+      - echo "[2/5] Loading data into ClickHouse ..."
+      - cd /workspace && python scripts/load_data.py
+
+  # --------------------------------------------------------------------------
+  # 3. dbt: build all models
+  # --------------------------------------------------------------------------
+  - id: dbt_run
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    description: |
+      Runs the full dbt DAG: staging views → intermediate tables → mart tables.
+      Uses the 'docker' profile target so dbt connects to 'clickhouse'
+      (Docker container hostname) rather than 'localhost'.
+
+      Models built:
+        staging:      stg_trades, stg_quotes, stg_order_book
+        intermediate: int_vwap, int_spread_analytics, int_volume_profile,
+                      int_order_book_depth
+        marts:        mart_daily_summary, mart_data_quality_summary
+    env:
+      VIRTUAL_ENV: /opt/venv
+      PATH: /opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    commands:
+      - echo "[3/5] Running dbt models ..."
+      - cd /workspace/dbt_project && dbt run --profiles-dir . --target docker --no-use-colors
+
+  # --------------------------------------------------------------------------
+  # 4. Post-dbt validation — run quality checks and dbt tests in parallel
+  # --------------------------------------------------------------------------
+  - id: post_dbt_checks
+    type: io.kestra.plugin.core.flow.Parallel
+    description: "Quality checks and dbt schema tests run concurrently after dbt_run."
+    tasks:
+
+      - id: quality_checks
+        type: io.kestra.plugin.scripts.shell.Commands
+        taskRunner:
+          type: io.kestra.plugin.core.runner.Process
+        description: |
+          Standalone Python anomaly detector.  Scans raw trades and quotes for:
+            • Crossed spreads (bid > ask)
+            • Stale quotes (gap > 5 s)
+            • Price outliers (± > 3 σ from rolling mean)
+            • Missing fields (zero size/price)
+          Results are persisted to equity_market.data_quality_issues and
+          visualised in the Grafana "Data Quality Monitor" dashboard.
+        env:
+          VIRTUAL_ENV: /opt/venv
+          PATH: /opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        commands:
+          - echo "[4a/5] Running data quality checks ..."
+          - cd /workspace && python scripts/data_quality_check.py
+
+      - id: dbt_test
+        type: io.kestra.plugin.scripts.shell.Commands
+        taskRunner:
+          type: io.kestra.plugin.core.runner.Process
+        description: |
+          Runs all dbt tests:
+            • Schema tests  — not_null, accepted_values on critical columns
+            • Custom tests  — assert_no_future_trades, assert_no_future_quotes,
+                              assert_vwap_within_range
+        env:
+          VIRTUAL_ENV: /opt/venv
+          PATH: /opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        commands:
+          - echo "[4b/5] Running dbt tests ..."
+          - cd /workspace/dbt_project && dbt test --profiles-dir . --target docker --no-use-colors
+
+errors:
+  - id: notify_failure
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    description: "Prints a diagnostic summary if any task fails."
+    commands:
+      - echo "========================================="
+      - echo "  PIPELINE FAILED"
+      - echo "  Execution ID  : {{ execution.id }}"
+      - echo "  Failed task   : {{ execution.state }}"
+      - echo "  Timestamp     : {{ now() }}"
+      - echo "========================================="

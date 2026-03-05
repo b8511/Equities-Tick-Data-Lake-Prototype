@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   clickhouse:
     image: clickhouse/clickhouse-server:24.3-alpine
@@ -41,6 +39,50 @@ services:
       clickhouse:
         condition: service_healthy
 
+  # ---------------------------------------------------------------------------
+  # Kestra — workflow orchestration
+  # UI: http://localhost:8080
+  # Standalone mode with pure in-memory queue + repository (no JDBC/PostgreSQL
+  # needed for local dev).  The project root is mounted at /workspace so
+  # pipeline scripts are accessible from within flow tasks.
+  # ---------------------------------------------------------------------------
+  kestra:
+    build:
+      context: ./kestra
+      dockerfile: Dockerfile
+    container_name: bnp_kestra
+    user: "root"
+    command: server standalone --worker-thread=128
+    ports:
+      - "8080:8080" # Kestra UI & API
+      - "8081:8081" # Management endpoint
+    volumes:
+      - kestra_data:/app/storage
+      - .:/workspace # project root → /workspace
+      - /var/run/docker.sock:/var/run/docker.sock # allow Docker task runner
+    environment:
+      KESTRA_CONFIGURATION: |
+        kestra:
+          server:
+            basicAuth:
+              enabled: false
+          repository:
+            type: memory
+          storage:
+            type: local
+            local:
+              basePath: /app/storage
+          queue:
+            type: memory
+          tasks:
+            tmpDir:
+              path: /tmp/kestra-wd
+          url: http://localhost:8080/
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+
 volumes:
   clickhouse_data:
   grafana_data:
+  kestra_data:

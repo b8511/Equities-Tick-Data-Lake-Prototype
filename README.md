@@ -19,13 +19,15 @@
 ┌─────────────────────┐
 │     ClickHouse      │   MergeTree tables, partitioned by day
 │  (equity_market DB) │   10-20× compression on tick data
-│                     │   Schema: trades, quotes, data_quality_issues
+│                     │   Schema: trades, quotes, order_book_snapshots,
+│                     │           data_quality_issues
 └────────┬────────────┘
          │
          ▼
 ┌─────────────────────┐
-│       dbt           │   5 models: staging → intermediate → marts
-│  (dbt_project/)     │   VWAP, spread analytics, volume profile, daily summary
+│       dbt           │   7 models: staging → intermediate → marts
+│  (dbt_project/)     │   VWAP, spread analytics, volume profile,
+│                     │   L2 order book depth, daily summary
 │                     │   Schema tests + 3 custom data quality tests
 └────────┬────────────┘
          │
@@ -34,6 +36,15 @@
 │  Data Quality       │   Standalone Python checker
 │  (scripts/)         │   Crossed spreads, stale quotes, price outliers, null fields
 │                     │   Results → data_quality_issues table
+└────────┬────────────┘
+         │
+         ▼
+┌─────────────────────┐
+│      Kestra         │   Workflow orchestration (http://localhost:8080)
+│  (kestra/)          │   YAML-defined DAG: generate → load → dbt_run →
+│                     │     ┌─ quality_checks (parallel)
+│                     │     └─ dbt_test       (parallel)
+│                     │   Weekday schedule trigger (22:00 UTC)
 └────────┬────────────┘
          │
          ▼
@@ -77,13 +88,19 @@ make all
 ```
 
 This runs the full pipeline:
-1. `make up` — starts ClickHouse + Grafana containers
+1. `make up` — starts ClickHouse + Grafana + Kestra containers
 2. `make sync` — installs Python dependencies via `uv sync`
 3. `make generate` — creates ~50M rows of synthetic tick data
 4. `make load` — bulk-loads CSVs into ClickHouse
 5. `make dbt-run` — builds all dbt models (staging → intermediate → marts)
 6. `make quality` — runs data quality checks, logs issues
 7. `make dbt-test` — validates schema + custom tests
+
+To also orchestrate via Kestra:
+```bash
+make kestra-deploy   # push flows to Kestra's API (Kestra must be running)
+```
+Then trigger the pipeline from the Kestra UI at http://localhost:8080.
 
 ### Step by step
 
@@ -114,6 +131,7 @@ make dbt-test
 | Service | URL | Credentials |
 |---------|-----|-------------|
 | Grafana | http://localhost:3000 | admin / admin |
+| Kestra UI | http://localhost:8080 | none (auth disabled) |
 | ClickHouse HTTP | http://localhost:8123 | default / (empty) |
 | ClickHouse Native | localhost:9000 | default / (empty) |
 
@@ -200,25 +218,30 @@ In a production hybrid deployment:
 
 ```
 bnp_prototype/
-├── docker-compose.yml          # ClickHouse + Grafana
+├── docker-compose.yml          # ClickHouse + Grafana + Kestra
 ├── Makefile                    # Pipeline commands
 ├── pyproject.toml              # Python dependencies (uv)
 ├── clickhouse/
 │   └── init/
-│       └── 01_schema.sql       # DDL: trades, quotes, quality tables
+│       └── 01_schema.sql       # DDL: trades, quotes, order_book_snapshots, quality tables
 ├── datagen/
-│   └── generate_ticks.py       # Synthetic data generator (~50M rows)
+│   └── generate_ticks.py       # Synthetic data generator (~50M rows, L1 + L2)
 ├── scripts/
 │   ├── load_data.py            # Bulk CSV → ClickHouse loader
 │   └── data_quality_check.py   # Anomaly detection + logging
 ├── dbt_project/
 │   ├── dbt_project.yml
-│   ├── profiles.yml
+│   ├── profiles.yml            # dev (localhost) + docker (container hostname) targets
 │   ├── models/
-│   │   ├── staging/            # stg_trades, stg_quotes
-│   │   ├── intermediate/       # int_vwap, int_spread, int_volume
+│   │   ├── staging/            # stg_trades, stg_quotes, stg_order_book
+│   │   ├── intermediate/       # int_vwap, int_spread, int_volume, int_order_book_depth
 │   │   └── marts/              # mart_daily_summary, mart_quality
 │   └── tests/                  # Custom SQL tests
+├── kestra/
+│   ├── Dockerfile              # Kestra + Python/uv/dbt baked in
+│   └── flows/
+│       ├── equity_tick_pipeline.yml         # Main DAG (manual trigger)
+│       └── equity_tick_daily_schedule.yml   # Weekday 22:00 UTC schedule
 ├── grafana/
 │   ├── provisioning/           # Auto-configured datasource + dashboards
 │   └── dashboards/             # 3 JSON dashboard definitions

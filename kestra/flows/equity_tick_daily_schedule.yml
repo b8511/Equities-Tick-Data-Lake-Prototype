@@ -1,0 +1,30 @@
+id: equity_tick_daily_schedule
+namespace: bnp.equity
+description: |
+  Scheduled trigger that runs the equity_tick_pipeline every weekday after
+  US market close (22:00 UTC ≈ 17:00 ET), passing the previous trading day's
+  data generation parameters.
+
+  In a production setup this would trigger on a real market-data feed event
+  (Kafka topic, S3 file arrival, etc.) rather than a wall-clock schedule.
+
+labels:
+  project: bnp-prototype
+  type: schedule
+
+tasks:
+  - id: run_pipeline
+    type: io.kestra.plugin.core.flow.Subflow
+    namespace: bnp.equity
+    flowId: equity_tick_pipeline
+    inputs:
+      num_trading_days: 1
+      symbols_seed: "{{ now() | dateAdd(-1, 'DAYS') | date('yyyyMMdd') | int % 10000 }}"
+    wait: true
+    transmitFailed: true
+
+triggers:
+  - id: weekday_market_close
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 22 * * 1-5"
+    description: "Mon–Fri at 22:00 UTC (after US equity market close at 21:00 UTC)"

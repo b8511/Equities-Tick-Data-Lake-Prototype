@@ -29,8 +29,14 @@ import numpy as np
 # Configuration
 # ---------------------------------------------------------------------------
 OUTPUT_DIR = Path(__file__).parent.parent / "data"
-NUM_TRADING_DAYS = 1
+
+# Allow Kestra (and other orchestrators) to override via environment variable.
+NUM_TRADING_DAYS = int(os.environ.get("NUM_TRADING_DAYS", 1))
 START_DATE = datetime(2025, 12, 1, tzinfo=timezone.utc)
+
+# Seed can be overridden for reproducible scheduled runs
+_seed_env = os.environ.get("NUMPY_SEED", "42")
+_NUMPY_SEED = int(_seed_env) if _seed_env.isdigit() else 42
 
 # Market hours (US Eastern approximation in UTC: 14:30 - 21:00)
 MARKET_OPEN_HOUR, MARKET_OPEN_MIN = 14, 30
@@ -341,7 +347,7 @@ def main():
         if p.exists():
             p.unlink()
 
-    rng = np.random.default_rng(seed=42)
+    rng = np.random.default_rng(seed=_NUMPY_SEED)
     days = trading_days(START_DATE, NUM_TRADING_DAYS)
 
     trade_header = ["symbol", "timestamp", "trade_price", "trade_size",

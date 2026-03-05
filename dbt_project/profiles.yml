@@ -10,3 +10,15 @@ equity_tick_lake:
       password: "clickhouse"
       secure: false
       verify: false
+
+    # Used when dbt runs inside Docker (e.g. via Kestra).
+    # 'clickhouse' is the Docker Compose service/container hostname.
+    docker:
+      type: clickhouse
+      schema: equity_market
+      host: clickhouse
+      port: 8123
+      user: default
+      password: "clickhouse"
+      secure: false
+      verify: false
