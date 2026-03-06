@@ -22,62 +22,32 @@ ClickHouse fills that gap: free, SQL-native, excellent compression on tick data 
 
 ## Quick Start
 
-### Prerequisites
-- Docker & Docker Compose
-- Python 3.10+
-- [uv](https://docs.astral.sh/uv/) (package manager)
-
-### One-command pipeline
+**Requirements:** Docker, Docker Compose, Python 3.10+, [uv](https://docs.astral.sh/uv/)
 
 ```bash
 make all
 ```
 
-This runs the full pipeline:
-1. `make up` — starts ClickHouse + Grafana + Kestra containers
-2. `make sync` — installs Python dependencies via `uv sync`
-3. `make generate` — creates ~50M rows of synthetic tick data
-4. `make load` — bulk-loads CSVs into ClickHouse
-5. `make dbt-run` — builds all dbt models (staging → intermediate → marts)
-6. `make quality` — runs data quality checks, logs issues
-7. `make dbt-test` — validates schema + custom tests
+That's it. It runs the full pipeline: start containers → generate data → load → dbt → quality checks → dbt tests.
 
-To also orchestrate via Kestra:
-```bash
-make kestra-deploy   # push flows to Kestra's API (Kestra must be running)
-```
-Then trigger the pipeline from the Kestra UI at http://localhost:8080.
-
-### Step by step
+To run steps individually:
 
 ```bash
-# 1. Install dependencies
-uv sync
-
-# 2. Start infrastructure
-make up
-
-# 3. Generate data (takes ~5-10 min)
-make generate
-
-# 4. Load into ClickHouse
-make load
-
-# 5. Build dbt models
-make dbt-run
-
-# 6. Run quality checks
-make quality
-
-# 7. Run dbt tests
-make dbt-test
+uv sync          # install dependencies
+make up          # start ClickHouse, Grafana, Kestra
+make generate    # generate tick data (~5-10 min)
+make load        # load CSVs into ClickHouse
+make dbt-run     # build dbt models
+make quality     # run quality checks
+make dbt-test    # run dbt tests
 ```
 
-### Access points
+To use Kestra for orchestration, start it with `make up` then run `make kestra-deploy` to push the flows. Trigger from http://localhost:8080.
+
 | Service | URL | Credentials |
 |---------|-----|-------------|
 | Grafana | http://localhost:3000 | admin / admin |
-| Kestra UI | http://localhost:8080 | none (auth disabled) |
+| Kestra | http://localhost:8080 | — |
 | ClickHouse HTTP | http://localhost:8123 | default / (empty) |
 | ClickHouse Native | localhost:9000 | default / (empty) |
 
