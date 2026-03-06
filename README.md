@@ -1,78 +1,24 @@
 # Equities Tick Data Lake — ClickHouse
 
-> A portfolio project demonstrating a production-style analytical data platform for
-> cash equities market data, built with ClickHouse, dbt, and Grafana.
-> Designed to showcase the skills required for a **KDB+ Developer** role at a Tier-1
-> investment bank (specifically the BNP Paribas Global Markets Cash Equities team).
+A portfolio project built with ClickHouse, dbt, and Grafana. It models a historical tick data platform of the kind that would sit alongside a KDB+ tickerplant in a cash equities stack — built as prep for a KDB+ Developer role at BNP Paribas Global Markets.
 
 ---
 
-## Architecture
+## How it works
+
+Synthetic tick data (~50M rows, 25 symbols, 30 trading days) is generated in Python and loaded into ClickHouse. dbt transforms the raw data through staging, intermediate, and mart layers. A quality check script detects anomalies and logs them. Kestra orchestrates the whole thing on a daily schedule. Grafana visualises the results.
 
 ```
-┌─────────────────────┐
-│  Synthetic Data Gen │   Python / NumPy
-│  (datagen/)         │   ~50M rows: 25 symbols × 30 trading days
-└────────┬────────────┘   Realistic GBM prices, U-shaped volume, injected anomalies
-         │
-         ▼
-┌─────────────────────┐
-│     ClickHouse      │   MergeTree tables, partitioned by day
-│  (equity_market DB) │   10-20× compression on tick data
-│                     │   Schema: trades, quotes, order_book_snapshots,
-│                     │           data_quality_issues
-└────────┬────────────┘
-         │
-         ▼
-┌─────────────────────┐
-│       dbt           │   7 models: staging → intermediate → marts
-│  (dbt_project/)     │   VWAP, spread analytics, volume profile,
-│                     │   L2 order book depth, daily summary
-│                     │   Schema tests + 3 custom data quality tests
-└────────┬────────────┘
-         │
-         ▼
-┌─────────────────────┐
-│  Data Quality       │   Standalone Python checker
-│  (scripts/)         │   Crossed spreads, stale quotes, price outliers, null fields
-│                     │   Results → data_quality_issues table
-└────────┬────────────┘
-         │
-         ▼
-┌─────────────────────┐
-│      Kestra         │   Workflow orchestration (http://localhost:8080)
-│  (kestra/)          │   YAML-defined DAG: generate → load → dbt_run →
-│                     │     ┌─ quality_checks (parallel)
-│                     │     └─ dbt_test       (parallel)
-│                     │   Weekday schedule trigger (22:00 UTC)
-└────────┬────────────┘
-         │
-         ▼
-┌─────────────────────┐
-│      Grafana        │   3 provisioned dashboards:
-│  (grafana/)         │   • Market Overview (VWAP, volume, spread heatmap)
-│                     │   • Data Quality Monitor (issues, severity, quality %)
-│                     │   • Symbol Deep Dive (tick chart, OHLC, distribution)
-└─────────────────────┘
+datagen → ClickHouse → dbt → quality checks → Grafana
+                                ↑
+                             Kestra
 ```
 
-## Why ClickHouse (not KDB)?
+## Why ClickHouse instead of KDB?
 
-| Dimension | KDB+/q | ClickHouse |
-|-----------|--------|------------|
-| **Best at** | Real-time intraday (sub-ms in-memory) | Historical analytics (months/years) |
-| **Query language** | q (niche, ~5K global practitioners) | SQL (universal) |
-| **License** | $50-150K/core/year | Apache 2.0 (free) |
-| **Scaling** | Vertical (manual sharding) | Horizontal (native distributed) |
-| **Compression** | 2-5× | 10-20× on tick data |
-| **Temporal joins** | First-class (`aj`, `wj`) | Limited `ASOF JOIN` |
+KDB is the right tool for real-time intraday analytics — sub-millisecond latency, in-memory, first-class temporal joins. But it's expensive (~$50-150K/core/year) and q has a steep learning curve. Most people at a bank (analysts, risk, compliance) just want SQL.
 
-**The hybrid thesis:** KDB owns the real-time hot path. ClickHouse extends reach to
-the 90% of users (analysts, risk, compliance) who need SQL access to historical tick
-data without learning q — at 1/10th the storage cost.
-
-This project demonstrates the **ClickHouse side** of that architecture: the
-analytical data lake that would sit alongside KDB's tickerplant in production.
+ClickHouse fills that gap: free, SQL-native, excellent compression on tick data (10-20×), and fast enough for historical queries across months of data. The idea is KDB handles the hot path, ClickHouse handles the rest.
 
 ## Quick Start
 
