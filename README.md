@@ -53,117 +53,101 @@ To use Kestra for orchestration, start it with `make up` then run `make kestra-d
 
 ## Data Model
 
-### Raw tables (ClickHouse)
+### ClickHouse tables
 
-**`trades`** — individual trade executions
-| Column | Type | Description |
-|--------|------|-------------|
-| symbol | LowCardinality(String) | Ticker symbol |
-| timestamp | DateTime64(6, 'UTC') | Microsecond precision |
-| trade_price | Float64 | Execution price |
-| trade_size | UInt32 | Shares traded |
-| exchange | LowCardinality(String) | NYSE, NASDAQ, etc. |
-| trade_condition | LowCardinality(String) | Regular, extended hours, etc. |
-| data_quality_flag | Enum8 | OK, PRICE_OUTLIER, STALE, etc. |
+**`trades`** — one row per trade execution
 
-**`quotes`** — L1 bid/ask quotes
-| Column | Type | Description |
-|--------|------|-------------|
-| symbol | LowCardinality(String) | Ticker symbol |
-| timestamp | DateTime64(6, 'UTC') | Microsecond precision |
-| bid_price / ask_price | Float64 | Best bid and ask |
-| bid_size / ask_size | UInt32 | Depth at top of book |
-| exchange | LowCardinality(String) | Reporting exchange |
-| data_quality_flag | Enum8 | OK, CROSSED_SPREAD, STALE, etc. |
+| Column | Type |
+|--------|------|
+| symbol | LowCardinality(String) |
+| timestamp | DateTime64(6, 'UTC') |
+| trade_price | Float64 |
+| trade_size | UInt32 |
+| exchange | LowCardinality(String) |
+| trade_condition | LowCardinality(String) |
+| data_quality_flag | Enum8 |
 
-**`order_book_snapshots`** — L2 order book (10 bid + 10 ask price levels)
-| Column | Type | Description |
-|--------|------|-------------|
-| symbol | LowCardinality(String) | Ticker symbol |
-| timestamp | DateTime64(6, 'UTC') | Microsecond precision |
-| bid_prices / ask_prices | Array(Float64) | 10 price levels; index 1 = best |
-| bid_sizes / ask_sizes | Array(UInt32) | Volume at each level |
-| mid_price | Float64 | (BBO bid + BBO ask) / 2 |
-| weighted_mid | Float64 | Size-weighted mid across all levels |
-| book_imbalance | Float32 | (sum_bid_vol − sum_ask_vol) / total_vol; range [−1, 1] |
-| data_quality_flag | Enum8 | OK, CROSSED_BOOK, MISSING_LEVELS, STALE |
+**`quotes`** — L1 bid/ask
+
+| Column | Type |
+|--------|------|
+| symbol | LowCardinality(String) |
+| timestamp | DateTime64(6, 'UTC') |
+| bid_price / ask_price | Float64 |
+| bid_size / ask_size | UInt32 |
+| exchange | LowCardinality(String) |
+| data_quality_flag | Enum8 |
+
+**`order_book_snapshots`** — L2 book (10 levels each side)
+
+| Column | Type |
+|--------|------|
+| symbol | LowCardinality(String) |
+| timestamp | DateTime64(6, 'UTC') |
+| bid_prices / ask_prices | Array(Float64) |
+| bid_sizes / ask_sizes | Array(UInt32) |
+| mid_price | Float64 |
+| weighted_mid | Float64 |
+| book_imbalance | Float32 |
+| data_quality_flag | Enum8 |
 
 ### dbt models
 
-| Layer | Model | Description |
+| Layer | Model | What it does |
 |-------|-------|-------------|
-| Staging | `stg_trades` | Cleaned trades + computed notional |
-| Staging | `stg_quotes` | Cleaned quotes + spread in bps |
-| Staging | `stg_order_book` | L2 snapshots unpivoted to long format (one row per side+level) |
-| Intermediate | `int_vwap` | Per-symbol per-minute VWAP + OHLC |
-| Intermediate | `int_spread_analytics` | Spread stats (avg, median, p95) |
-| Intermediate | `int_volume_profile` | 5-min intraday volume distribution |
-| Intermediate | `int_order_book_depth` | Per-minute depth, imbalance, spread from L2 book |
-| Mart | `mart_daily_summary` | Daily OHLCV + spread + quality metrics |
-| Mart | `mart_data_quality_summary` | Aggregated quality issues |
+| Staging | `stg_trades` | cleans trades, adds notional |
+| Staging | `stg_quotes` | cleans quotes, adds spread in bps |
+| Staging | `stg_order_book` | unpivots L2 snapshots to long format |
+| Intermediate | `int_vwap` | per-symbol per-minute VWAP + OHLC |
+| Intermediate | `int_spread_analytics` | avg / median / p95 spread |
+| Intermediate | `int_volume_profile` | 5-min intraday volume buckets |
+| Intermediate | `int_order_book_depth` | per-minute depth, imbalance, spread |
+| Mart | `mart_daily_summary` | daily OHLCV + spread + quality % |
+| Mart | `mart_data_quality_summary` | rolled-up quality issue counts |
 
 ## Data Quality
 
-### Injected anomalies (synthetic data)
-- **Crossed spreads** (0.1%): bid > ask — simulates exchange errors
-- **Stale quotes** (0.2%): gaps > 5s — simulates feed disconnects
-- **Price outliers** (0.05%): ±5-15% from fair value — simulates bad prints
-- **Missing fields** (0.03%): zero sizes — simulates parsing failures
+The synthetic data has intentional anomalies injected:
+- crossed spreads (0.1%) — bid > ask
+- stale quotes (0.2%) — gaps > 5s
+- price outliers (0.05%) — ±5-15% from fair value
+- missing fields (0.03%) — zero sizes
 
-### Detection pipeline
-The quality checker (`scripts/data_quality_check.py`) independently detects all
-injected anomalies and logs them to `data_quality_issues` with severity levels.
-Results are visualized in the **Data Quality Monitor** dashboard.
+`scripts/data_quality_check.py` detects all of these and writes them to the `data_quality_issues` table. The Grafana Data Quality dashboard visualises the results.
 
-### dbt tests
-- Schema tests: not_null, accepted_values on all critical columns
-- Custom: no future timestamps, VWAP within 5% of close price
+dbt tests cover: not_null / accepted_values on key columns, no future timestamps, and VWAP within 5% of close price.
 
-## What I'd Add With KDB
+## What I'd add with KDB in the stack
 
-In a production hybrid deployment:
-1. **KDB Tickerplant** → real-time feed capture (sub-μs latency)
-2. **KDB RDB** → intraday in-memory analytics for trading desk
-3. **Kafka bridge** → KDB publishes ticks to Kafka as side-channel
-4. **ClickHouse** (this project) → consumes from Kafka, stores historical,
-   serves SQL analytics to the broader organization
-5. **Temporal joins** → KDB's `aj`/`wj` for execution quality analysis
-   (trade-to-quote alignment) — cannot be replicated efficiently in ClickHouse
+If this were a real hybrid deployment, KDB would sit in front:
+
+1. **KDB tickerplant** — captures the feed in real time
+2. **KDB RDB** — in-memory intraday analytics for the trading desk
+3. **Kafka bridge** — KDB publishes ticks as a side-channel
+4. **ClickHouse** (this project) — consumes from Kafka, stores historical data, serves SQL to analysts and risk
+5. **Temporal joins** — `aj`/`wj` in KDB for trade-to-quote alignment; ClickHouse's `ASOF JOIN` doesn't quite get there
 
 ## Project Structure
 
 ```
 bnp_prototype/
-├── docker-compose.yml          # ClickHouse + Grafana + Kestra
-├── Makefile                    # Pipeline commands
-├── pyproject.toml              # Python dependencies (uv)
-├── clickhouse/
-│   └── init/
-│       └── 01_schema.sql       # DDL: trades, quotes, order_book_snapshots, quality tables
-├── datagen/
-│   └── generate_ticks.py       # Synthetic data generator (~50M rows, L1 + L2)
+├── docker-compose.yml
+├── Makefile
+├── pyproject.toml
+├── clickhouse/init/01_schema.sql     # table DDL
+├── datagen/generate_ticks.py         # synthetic data generator
 ├── scripts/
-│   ├── load_data.py            # Bulk CSV → ClickHouse loader
-│   └── data_quality_check.py   # Anomaly detection + logging
+│   ├── load_data.py                  # CSV → ClickHouse
+│   └── data_quality_check.py         # anomaly detection
 ├── dbt_project/
-│   ├── dbt_project.yml
-│   ├── profiles.yml            # dev (localhost) + docker (container hostname) targets
-│   ├── models/
-│   │   ├── staging/            # stg_trades, stg_quotes, stg_order_book
-│   │   ├── intermediate/       # int_vwap, int_spread, int_volume, int_order_book_depth
-│   │   └── marts/              # mart_daily_summary, mart_quality
-│   └── tests/                  # Custom SQL tests
-├── kestra/
-│   ├── Dockerfile              # Kestra + Python/uv/dbt baked in
-│   └── flows/
-│       ├── equity_tick_pipeline.yml         # Main DAG (manual trigger)
-│       └── equity_tick_daily_schedule.yml   # Weekday 22:00 UTC schedule
-├── grafana/
-│   ├── provisioning/           # Auto-configured datasource + dashboards
-│   └── dashboards/             # 3 JSON dashboard definitions
-└── docs/
+│   ├── models/staging/
+│   ├── models/intermediate/
+│   ├── models/marts/
+│   └── tests/
+├── kestra/flows/
+│   ├── equity_tick_pipeline.yml      # manual trigger
+│   └── equity_tick_daily_schedule.yml
+└── grafana/
+    ├── provisioning/
+    └── dashboards/
 ```
-
-## License
-
-MIT — built as a portfolio / interview demonstration project.
